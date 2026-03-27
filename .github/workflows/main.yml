@@ -1,4 +1,4 @@
-name: Build Kernel - r8s (SM-G780F) [CLANG 14 VARIANT]
+name: Build Kernel - r8s (SM-G780F) [CLANG 14 + GNU AS]
 
 on:
   workflow_dispatch:
@@ -25,35 +25,35 @@ jobs:
             lz4 python3 rsync unzip wget zstd \
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
+          
+          echo "✅ Build dependencies installed"
+          which aarch64-linux-gnu-as
+          aarch64-linux-gnu-as --version
 
-      # ── 3. Toolchain – Clang 14 via APT (mais estável em 22.04) ────────────
+      # ── 3. Toolchain – Clang 14 (nativo em Ubuntu 22.04) ────────────────────
       - name: Install Clang 14
         run: |
-          # Clang 14 está nativamente disponível em Ubuntu 22.04
-          # Sem necessidade de PPA ou script, apenas apt-get
-          echo "📦 Installing Clang 14 from standard Ubuntu repos..."
-          
+          echo "📦 Installing Clang 14..."
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             clang-14 llvm-14 lld-14 libclang-14-dev
           
-          # Verify installation
+          # Verify
           clang-14 --version
-          echo "✅ Clang 14 installed successfully"
+          lld-14 --version
           
-          # Create symlink directory
+          # Create toolchain directory
           mkdir -p $HOME/clang14/bin
           
-          # Link all tools
-          for tool in clang clang++ llvm-ar llvm-nm \
-                      llvm-objcopy llvm-objdump llvm-strip; do
+          # Link tools
+          for tool in clang clang++ llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-strip; do
             REAL=$(which ${tool}-14 2>/dev/null)
             if [ -n "$REAL" ]; then
               ln -sf "$REAL" $HOME/clang14/bin/$tool
             fi
           done
           
-          # Link ld.lld (LLD linker)
+          # Link linker
           REAL=$(which lld-14 2>/dev/null)
           if [ -n "$REAL" ]; then
             ln -sf "$REAL" $HOME/clang14/bin/ld.lld
@@ -62,8 +62,7 @@ jobs:
           # Add to PATH
           echo "$HOME/clang14/bin" >> $GITHUB_PATH
           
-          # Verify
-          echo "✅ Clang tools linked:"
+          echo "✅ Clang 14 installed and linked"
           ls -la $HOME/clang14/bin/
 
       # ── 4. Symlink para o CC hardcoded no Makefile ─────────────────────────
@@ -75,13 +74,27 @@ jobs:
           echo "✅ Symlink criado:"
           ls -la $HARDCODED/bin/clang
 
-      # ── 5. Patch crítico no Makefile ──────────────────────────────────────
-      - name: Patch Makefile - replace -no-integrated-as with -integrated-as
+      # ── 5. FIX CRÍTICO: Garantir -no-integrated-as ────────────────────────
+      # IMPORTANTE: Samsung Exynos kernels têm assembly incompatível com LLVM-AS
+      # Precisamos usar o GNU assembler externo (aarch64-linux-gnu-as)
+      - name: Ensure -no-integrated-as flag for external GNU assembler
         run: |
-          echo "📝 Applying Makefile patches..."
-          grep -n "no-integrated-as" Makefile || echo "(not found, skipping)"
-          sed -i 's/-no-integrated-as/-integrated-as/g' Makefile
-          echo "✅ Patches applied"
+          echo "🔧 Fixing assembly configuration..."
+          
+          # Check if already configured
+          if grep -q "CLANG_FLAGS.*no-integrated-as" Makefile; then
+            echo "✅ -no-integrated-as already configured"
+          else
+            echo "⚠️  Adding -no-integrated-as to use external GNU assembler..."
+            # Append flag to Makefile if not present
+            grep -q "no-integrated-as" Makefile || echo 'CLANG_FLAGS += -no-integrated-as' >> Makefile
+          fi
+          
+          # Verify it's set
+          echo "📋 Current CLANG_FLAGS configuration:"
+          grep "CLANG_FLAGS" Makefile || echo "No CLANG_FLAGS found (will be set by build)"
+          
+          echo "✅ Assembly configuration verified"
 
       # ── 6. Build kernel ─────────────────────────────────────────────────────
       - name: Build kernel
@@ -103,6 +116,8 @@ jobs:
           OBJCOPY: llvm-objcopy
           OBJDUMP: llvm-objdump
           STRIP: llvm-strip
+          # Force external assembler
+          AS: aarch64-linux-gnu-as
 
       # ── 7. Localiza a imagem gerada ────────────────────────────────────────
       - name: Locate output image
@@ -150,5 +165,6 @@ jobs:
           echo "| SoC | Exynos 9830 (990) |" >> $GITHUB_STEP_SUMMARY
           echo "| Defconfig | exynos9830-r8slte_defconfig |" >> $GITHUB_STEP_SUMMARY
           echo "| Toolchain | Clang 14 (Ubuntu 22.04 native) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Assembler | GNU as (aarch64-linux-gnu-as) |" >> $GITHUB_STEP_SUMMARY
           echo "| Ubuntu | 22.04 LTS |" >> $GITHUB_STEP_SUMMARY
           echo "| Image | ${{ steps.find_image.outputs.IMAGE_PATH }} |" >> $GITHUB_STEP_SUMMARY
