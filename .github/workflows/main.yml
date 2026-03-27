@@ -45,29 +45,32 @@ jobs:
           echo "$HOME/clang/bin" >> $GITHUB_PATH
           $HOME/clang/bin/clang --version
 
-      # ── 4. Build ───────────────────────────────────────────────────────────
-      # O build.sh apenas faz `make defconfig && make -j16`.
-      # O make herda CC, CROSS_COMPILE etc do ambiente abaixo.
-      - name: Build kernel
+      # ── 4. Symlink para o path hardcoded no Makefile ───────────────────────
+      # O Makefile usa ./toolchain/clang/host/linux-x86/clang-r349610-jopp/bin/
+      # independente do CC= que passarmos. Criamos um symlink desse path
+      # apontando para o Neutron Clang que acabamos de baixar.
+      - name: Symlink toolchain to hardcoded Makefile path
         run: |
-          chmod +x build.sh
-          bash build.sh
+          HARDCODED="toolchain/clang/host/linux-x86/clang-r349610-jopp"
+          mkdir -p "$HARDCODED"
+          ln -s $HOME/clang/bin "$HARDCODED/bin"
+          echo "Symlink criado:"
+          ls -la "$HARDCODED/bin/clang"
+
+      # ── 5. Build ───────────────────────────────────────────────────────────
+      - name: Build kernel
+        run: bash build.sh
         env:
-          # Android / platform vars (já estão no build.sh, mas garantir)
           SEC_BUILD_CONF_VENDOR_BUILD_OS: "13"
           PLATFORM_VERSION: "13"
           ANDROID_MAJOR_VERSION: "T"
           ARCH: arm64
           SUBARCH: arm64
-
-          # Toolchain
           CC: clang
           CLANG_TRIPLE: aarch64-linux-gnu-
           CROSS_COMPILE: aarch64-linux-gnu-
           CROSS_COMPILE_ARM32: arm-linux-gnueabihf-
           CROSS_COMPILE_COMPAT: arm-linux-gnueabihf-
-
-          # LLVM utils (evita usar binutils do host para operações LLVM)
           LD: ld.lld
           AR: llvm-ar
           NM: llvm-nm
@@ -75,7 +78,7 @@ jobs:
           OBJDUMP: llvm-objdump
           STRIP: llvm-strip
 
-      # ── 5. Localiza a imagem gerada ────────────────────────────────────────
+      # ── 6. Localiza a imagem gerada ────────────────────────────────────────
       - name: Locate output image
         id: find_image
         run: |
@@ -99,7 +102,7 @@ jobs:
             fi
           done
 
-      # ── 6. Upload ──────────────────────────────────────────────────────────
+      # ── 7. Upload ──────────────────────────────────────────────────────────
       - name: Upload kernel image
         uses: actions/upload-artifact@v4
         with:
@@ -110,7 +113,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # ── 7. Resumo ──────────────────────────────────────────────────────────
+      # ── 8. Resumo ──────────────────────────────────────────────────────────
       - name: Build summary
         run: |
           echo "## Build concluido" >> $GITHUB_STEP_SUMMARY
@@ -119,5 +122,5 @@ jobs:
           echo "| Device | SM-G780F (r8s) |" >> $GITHUB_STEP_SUMMARY
           echo "| SoC | Exynos 9830 (990) |" >> $GITHUB_STEP_SUMMARY
           echo "| Defconfig | exynos9830-r8slte_defconfig |" >> $GITHUB_STEP_SUMMARY
-          echo "| Toolchain | Neutron Clang |" >> $GITHUB_STEP_SUMMARY
+          echo "| Toolchain | Neutron Clang 19 (via symlink) |" >> $GITHUB_STEP_SUMMARY
           echo "| Image | ${{ steps.find_image.outputs.IMAGE_PATH }} |" >> $GITHUB_STEP_SUMMARY
