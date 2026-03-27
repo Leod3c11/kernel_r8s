@@ -26,36 +26,36 @@ jobs:
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
 
-      # ── 3. Toolchain – Neutron Clang ───────────────────────────────────────
-      - name: Download Neutron Clang
+      # ── 3. Toolchain – Clang 12 via LLVM apt ──────────────────────────────
+      # Clang 12 é mais próximo do clang-r349610 original (~Clang 9/10)
+      # e tem melhor compatibilidade com kernels Samsung 4.19
+      - name: Install Clang 12
         run: |
-          mkdir -p $HOME/clang
-          cd $HOME/clang
+          curl -fsSL https://apt.llvm.org/llvm.sh | sudo bash -s -- 12
+          sudo apt-get install -y --no-install-recommends \
+            clang-12 llvm-12 lld-12 \
+            llvm-12-dev libclang-12-dev
 
-          LATEST=$(curl -sL \
-            https://api.github.com/repos/Neutron-Toolchains/clang-build-catalogue/releases/latest \
-            | grep "browser_download_url" | grep "tar.zst" | head -1 \
-            | cut -d '"' -f 4)
+          # Cria aliases sem sufixo no PATH
+          mkdir -p $HOME/clang12/bin
+          for tool in clang clang++ ld.lld llvm-ar llvm-nm \
+                      llvm-objcopy llvm-objdump llvm-strip; do
+            REAL=$(which ${tool}-12 2>/dev/null || which ${tool} 2>/dev/null)
+            if [ -n "$REAL" ]; then
+              ln -sf "$REAL" $HOME/clang12/bin/$tool
+            fi
+          done
 
-          echo "Baixando: $LATEST"
-          curl -L "$LATEST" -o clang.tar.zst
-          tar --use-compress-program=unzstd -xf clang.tar.zst
-          rm clang.tar.zst
-
-          echo "$HOME/clang/bin" >> $GITHUB_PATH
-          $HOME/clang/bin/clang --version
+          echo "$HOME/clang12/bin" >> $GITHUB_PATH
+          clang-12 --version
 
       # ── 4. Symlink para o path hardcoded no Makefile ───────────────────────
-      # O Makefile usa ./toolchain/clang/host/linux-x86/clang-r349610-jopp/bin/
-      # independente do CC= que passarmos. Criamos um symlink desse path
-      # apontando para o Neutron Clang que acabamos de baixar.
       - name: Symlink toolchain to hardcoded Makefile path
         run: |
           HARDCODED="toolchain/clang/host/linux-x86/clang-r349610-jopp"
           mkdir -p "$HARDCODED"
-          ln -s $HOME/clang/bin "$HARDCODED/bin"
-          echo "Symlink criado:"
-          ls -la "$HARDCODED/bin/clang"
+          ln -s $HOME/clang12/bin "$HARDCODED/bin"
+          echo "Symlink OK: $(ls $HARDCODED/bin/clang)"
 
       # ── 5. Build ───────────────────────────────────────────────────────────
       - name: Build kernel
@@ -122,5 +122,6 @@ jobs:
           echo "| Device | SM-G780F (r8s) |" >> $GITHUB_STEP_SUMMARY
           echo "| SoC | Exynos 9830 (990) |" >> $GITHUB_STEP_SUMMARY
           echo "| Defconfig | exynos9830-r8slte_defconfig |" >> $GITHUB_STEP_SUMMARY
-          echo "| Toolchain | Neutron Clang 19 (via symlink) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Toolchain | Clang 12 (LLVM apt) |" >> $GITHUB_STEP_SUMMARY
           echo "| Image | ${{ steps.find_image.outputs.IMAGE_PATH }} |" >> $GITHUB_STEP_SUMMARY
+
