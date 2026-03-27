@@ -1,4 +1,4 @@
-name: Build Kernel - r8s (SM-G780F) [CLANG 14 + GNU AS]
+name: Build Kernel - r8s (SM-G780F) - SIMPLE
 
 on:
   workflow_dispatch:
@@ -9,14 +9,12 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      # ── 1. Checkout ────────────────────────────────────────────────────────
-      - name: Checkout kernel source
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      # ── 2. Dependências do sistema ─────────────────────────────────────────
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
@@ -24,79 +22,28 @@ jobs:
             flex git kmod libelf-dev libssl-dev libncurses-dev \
             lz4 python3 rsync unzip wget zstd \
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
-          
-          echo "✅ Build dependencies installed"
-          which aarch64-linux-gnu-as
-          aarch64-linux-gnu-as --version
+            gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf \
+            clang-14 llvm-14 lld-14
 
-      # ── 3. Toolchain – Clang 14 (nativo em Ubuntu 22.04) ────────────────────
-      - name: Install Clang 14
+      - name: Setup Clang 14 toolchain
         run: |
-          echo "📦 Installing Clang 14..."
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            clang-14 llvm-14 lld-14 libclang-14-dev
-          
-          # Verify
-          clang-14 --version
-          lld-14 --version
-          
-          # Create toolchain directory
           mkdir -p $HOME/clang14/bin
-          
-          # Link tools
-          for tool in clang clang++ llvm-ar llvm-nm llvm-objcopy llvm-objdump llvm-strip; do
-            REAL=$(which ${tool}-14 2>/dev/null)
-            if [ -n "$REAL" ]; then
-              ln -sf "$REAL" $HOME/clang14/bin/$tool
-            fi
-          done
-          
-          # Link linker
-          REAL=$(which lld-14 2>/dev/null)
-          if [ -n "$REAL" ]; then
-            ln -sf "$REAL" $HOME/clang14/bin/ld.lld
-          fi
-          
-          # Add to PATH
+          ln -sf /usr/bin/clang-14 $HOME/clang14/bin/clang
+          ln -sf /usr/bin/clang++-14 $HOME/clang14/bin/clang++
+          ln -sf /usr/bin/llvm-ar-14 $HOME/clang14/bin/llvm-ar
+          ln -sf /usr/bin/llvm-nm-14 $HOME/clang14/bin/llvm-nm
+          ln -sf /usr/bin/llvm-objcopy-14 $HOME/clang14/bin/llvm-objcopy
+          ln -sf /usr/bin/llvm-objdump-14 $HOME/clang14/bin/llvm-objdump
+          ln -sf /usr/bin/llvm-strip-14 $HOME/clang14/bin/llvm-strip
+          ln -sf /usr/bin/lld-14 $HOME/clang14/bin/ld.lld
           echo "$HOME/clang14/bin" >> $GITHUB_PATH
-          
-          echo "✅ Clang 14 installed and linked"
-          ls -la $HOME/clang14/bin/
+          clang-14 --version
 
-      # ── 4. Symlink para o CC hardcoded no Makefile ─────────────────────────
-      - name: Symlink toolchain to hardcoded Makefile path
+      - name: Setup hardcoded toolchain path
         run: |
-          HARDCODED="toolchain/clang/host/linux-x86/clang-r349610-jopp"
-          mkdir -p "$HARDCODED"
-          ln -s $HOME/clang14/bin "$HARDCODED/bin"
-          echo "✅ Symlink criado:"
-          ls -la $HARDCODED/bin/clang
+          mkdir -p toolchain/clang/host/linux-x86/clang-r349610-jopp
+          ln -s $HOME/clang14/bin toolchain/clang/host/linux-x86/clang-r349610-jopp/bin
 
-      # ── 5. FIX CRÍTICO: Garantir -no-integrated-as ────────────────────────
-      # IMPORTANTE: Samsung Exynos kernels têm assembly incompatível com LLVM-AS
-      # Precisamos usar o GNU assembler externo (aarch64-linux-gnu-as)
-      - name: Ensure -no-integrated-as flag for external GNU assembler
-        run: |
-          echo "🔧 Fixing assembly configuration..."
-          
-          # Check if already configured
-          if grep -q "CLANG_FLAGS.*no-integrated-as" Makefile; then
-            echo "✅ -no-integrated-as already configured"
-          else
-            echo "⚠️  Adding -no-integrated-as to use external GNU assembler..."
-            # Append flag to Makefile if not present
-            grep -q "no-integrated-as" Makefile || echo 'CLANG_FLAGS += -no-integrated-as' >> Makefile
-          fi
-          
-          # Verify it's set
-          echo "📋 Current CLANG_FLAGS configuration:"
-          grep "CLANG_FLAGS" Makefile || echo "No CLANG_FLAGS found (will be set by build)"
-          
-          echo "✅ Assembly configuration verified"
-
-      # ── 6. Build kernel ─────────────────────────────────────────────────────
       - name: Build kernel
         run: bash build.sh
         env:
@@ -116,55 +63,22 @@ jobs:
           OBJCOPY: llvm-objcopy
           OBJDUMP: llvm-objdump
           STRIP: llvm-strip
-          # Force external assembler
           AS: aarch64-linux-gnu-as
 
-      # ── 7. Localiza a imagem gerada ────────────────────────────────────────
-      - name: Locate output image
-        id: find_image
+      - name: Find artifacts
+        if: always()
         run: |
-          for f in \
-            arch/arm64/boot/Image \
-            arch/arm64/boot/Image.gz \
-            out/arch/arm64/boot/Image \
-            out/arch/arm64/boot/Image.gz; do
-            if [ -f "$f" ]; then
-              echo "IMAGE_PATH=$f" >> $GITHUB_OUTPUT
-              echo "✅ Imagem: $f ($(du -sh $f | cut -f1))"
-              break
-            fi
-          done
+          echo "Searching for kernel image..."
+          find . -name "Image*" -o -name "*.img" 2>/dev/null | head -20
 
-          for dtb in arch/arm64/boot/dtb.img out/dtb.img; do
-            if [ -f "$dtb" ]; then
-              echo "DTB_PATH=$dtb" >> $GITHUB_OUTPUT
-              echo "✅ DTB: $dtb"
-              break
-            fi
-          done
-
-      # ── 8. Upload ──────────────────────────────────────────────────────────
-      - name: Upload kernel image
+      - name: Upload artifacts
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: kernel-r8s-${{ github.run_number }}
           path: |
-            ${{ steps.find_image.outputs.IMAGE_PATH }}
-            ${{ steps.find_image.outputs.DTB_PATH }}
-          if-no-files-found: error
+            arch/arm64/boot/Image*
+            out/dtb.img
+            out/arch/arm64/boot/Image*
+          if-no-files-found: warn
           retention-days: 7
-
-      # ── 9. Build summary ───────────────────────────────────────────────────
-      - name: Build summary
-        run: |
-          echo "## ✅ Build Concluído com Sucesso!" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Campo | Valor |" >> $GITHUB_STEP_SUMMARY
-          echo "|:------|:------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Device | SM-G780F (r8s) |" >> $GITHUB_STEP_SUMMARY
-          echo "| SoC | Exynos 9830 (990) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Defconfig | exynos9830-r8slte_defconfig |" >> $GITHUB_STEP_SUMMARY
-          echo "| Toolchain | Clang 14 (Ubuntu 22.04 native) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Assembler | GNU as (aarch64-linux-gnu-as) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Ubuntu | 22.04 LTS |" >> $GITHUB_STEP_SUMMARY
-          echo "| Image | ${{ steps.find_image.outputs.IMAGE_PATH }} |" >> $GITHUB_STEP_SUMMARY
