@@ -1,4 +1,4 @@
-name: Build Kernel - r8s (SM-G780F)
+name: Build Kernel - r8s (SM-G780F) [CLANG 14 VARIANT]
 
 on:
   workflow_dispatch:
@@ -26,47 +26,64 @@ jobs:
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
 
-      # ── 3. Toolchain – Clang 12 via LLVM apt ──────────────────────────────
-      - name: Install Clang 12
+      # ── 3. Toolchain – Clang 14 via APT (mais estável em 22.04) ────────────
+      - name: Install Clang 14
         run: |
-          curl -fsSL https://apt.llvm.org/llvm.sh | sudo bash -s -- 12
+          # Clang 14 está nativamente disponível em Ubuntu 22.04
+          # Sem necessidade de PPA ou script, apenas apt-get
+          echo "📦 Installing Clang 14 from standard Ubuntu repos..."
+          
+          sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            clang-12 llvm-12 lld-12
-
-          # Cria wrappers sem sufixo para o symlink e para o PATH
-          mkdir -p $HOME/clang12/bin
-          for tool in clang clang++ ld.lld llvm-ar llvm-nm \
+            clang-14 llvm-14 lld-14 libclang-14-dev
+          
+          # Verify installation
+          clang-14 --version
+          echo "✅ Clang 14 installed successfully"
+          
+          # Create symlink directory
+          mkdir -p $HOME/clang14/bin
+          
+          # Link all tools
+          for tool in clang clang++ llvm-ar llvm-nm \
                       llvm-objcopy llvm-objdump llvm-strip; do
-            REAL=$(which ${tool}-12 2>/dev/null)
-            [ -n "$REAL" ] && ln -sf "$REAL" $HOME/clang12/bin/$tool
+            REAL=$(which ${tool}-14 2>/dev/null)
+            if [ -n "$REAL" ]; then
+              ln -sf "$REAL" $HOME/clang14/bin/$tool
+            fi
           done
-          # lld pode se chamar lld-12 mas o wrapper precisa ser ld.lld
-          [ -f $HOME/clang12/bin/ld.lld ] || ln -sf $(which lld-12) $HOME/clang12/bin/ld.lld
+          
+          # Link ld.lld (LLD linker)
+          REAL=$(which lld-14 2>/dev/null)
+          if [ -n "$REAL" ]; then
+            ln -sf "$REAL" $HOME/clang14/bin/ld.lld
+          fi
+          
+          # Add to PATH
+          echo "$HOME/clang14/bin" >> $GITHUB_PATH
+          
+          # Verify
+          echo "✅ Clang tools linked:"
+          ls -la $HOME/clang14/bin/
 
-          echo "$HOME/clang12/bin" >> $GITHUB_PATH
-          clang-12 --version
-
-      # ── 4. Symlink para o CC hardcoded no Makefile (linha 374) ────────────
+      # ── 4. Symlink para o CC hardcoded no Makefile ─────────────────────────
       - name: Symlink toolchain to hardcoded Makefile path
         run: |
           HARDCODED="toolchain/clang/host/linux-x86/clang-r349610-jopp"
           mkdir -p "$HARDCODED"
-          ln -s $HOME/clang12/bin "$HARDCODED/bin"
-          echo "Symlink: $(ls -la $HARDCODED/bin/clang)"
+          ln -s $HOME/clang14/bin "$HARDCODED/bin"
+          echo "✅ Symlink criado:"
+          ls -la $HARDCODED/bin/clang
 
       # ── 5. Patch crítico no Makefile ──────────────────────────────────────
-      # Linha 506: CLANG_FLAGS += -no-integrated-as
-      # Isso força o Clang a chamar o /usr/bin/as externo (x86_64!), que
-      # não entende flags ARM como -EL. Trocamos para -integrated-as para
-      # que o Clang use seu próprio assembler interno (IAS).
       - name: Patch Makefile - replace -no-integrated-as with -integrated-as
         run: |
-          grep -n "no-integrated-as" Makefile
+          echo "📝 Applying Makefile patches..."
+          grep -n "no-integrated-as" Makefile || echo "(not found, skipping)"
           sed -i 's/-no-integrated-as/-integrated-as/g' Makefile
-          echo "--- Patch aplicado ---"
-          grep -n "integrated-as" Makefile
+          echo "✅ Patches applied"
 
-      # ── 6. Build ───────────────────────────────────────────────────────────
+      # ── 6. Build kernel ─────────────────────────────────────────────────────
       - name: Build kernel
         run: bash build.sh
         env:
@@ -98,7 +115,7 @@ jobs:
             out/arch/arm64/boot/Image.gz; do
             if [ -f "$f" ]; then
               echo "IMAGE_PATH=$f" >> $GITHUB_OUTPUT
-              echo "Imagem: $f ($(du -sh $f | cut -f1))"
+              echo "✅ Imagem: $f ($(du -sh $f | cut -f1))"
               break
             fi
           done
@@ -106,7 +123,7 @@ jobs:
           for dtb in arch/arm64/boot/dtb.img out/dtb.img; do
             if [ -f "$dtb" ]; then
               echo "DTB_PATH=$dtb" >> $GITHUB_OUTPUT
-              echo "DTB: $dtb"
+              echo "✅ DTB: $dtb"
               break
             fi
           done
@@ -122,14 +139,16 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # ── 9. Resumo ──────────────────────────────────────────────────────────
+      # ── 9. Build summary ───────────────────────────────────────────────────
       - name: Build summary
         run: |
-          echo "## Build concluido" >> $GITHUB_STEP_SUMMARY
+          echo "## ✅ Build Concluído com Sucesso!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Campo | Valor |" >> $GITHUB_STEP_SUMMARY
           echo "|:------|:------|" >> $GITHUB_STEP_SUMMARY
           echo "| Device | SM-G780F (r8s) |" >> $GITHUB_STEP_SUMMARY
           echo "| SoC | Exynos 9830 (990) |" >> $GITHUB_STEP_SUMMARY
           echo "| Defconfig | exynos9830-r8slte_defconfig |" >> $GITHUB_STEP_SUMMARY
-          echo "| Toolchain | Clang 12 (LLVM apt) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Toolchain | Clang 14 (Ubuntu 22.04 native) |" >> $GITHUB_STEP_SUMMARY
+          echo "| Ubuntu | 22.04 LTS |" >> $GITHUB_STEP_SUMMARY
           echo "| Image | ${{ steps.find_image.outputs.IMAGE_PATH }} |" >> $GITHUB_STEP_SUMMARY
