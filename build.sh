@@ -18,11 +18,10 @@ export OBJCOPY=llvm-objcopy
 export OBJDUMP=llvm-objdump
 export STRIP=llvm-strip
 
-# LLVM=1      → usa assembler integrado do Clang (resolve '-EL' e LSE atomics)
-# LLVM_IAS=1  → força Integrated Assembler mesmo em submakes
-# HOSTCFLAGS  → resolve 'multiple definition of yylloc' no dtc (gcc 10+ bug)
-# KCFLAGS     → desabilita warning que vira erro no Clang 19 novo
-EXTRA_MAKE_FLAGS="LLVM=1 LLVM_IAS=1 HOSTCFLAGS=-fcommon KCFLAGS=-Wno-gnu-variable-sized-type-not-at-end"
+# -fintegrated-as  → força Clang a usar seu próprio assembler interno,
+#                    evita chamar /usr/bin/as (x86) para código ARM
+# HOSTCFLAGS       → corrige 'multiple definition of yylloc' no dtc
+EXTRA_MAKE_FLAGS="HOSTCFLAGS=-fcommon KCFLAGS=-fintegrated-as"
 
 make $EXTRA_MAKE_FLAGS exynos9830-r8slte_defconfig
 make $EXTRA_MAKE_FLAGS -j$(nproc)
