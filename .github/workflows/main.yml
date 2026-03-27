@@ -27,37 +27,46 @@ jobs:
             gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf
 
       # ── 3. Toolchain – Clang 12 via LLVM apt ──────────────────────────────
-      # Clang 12 é mais próximo do clang-r349610 original (~Clang 9/10)
-      # e tem melhor compatibilidade com kernels Samsung 4.19
       - name: Install Clang 12
         run: |
           curl -fsSL https://apt.llvm.org/llvm.sh | sudo bash -s -- 12
           sudo apt-get install -y --no-install-recommends \
-            clang-12 llvm-12 lld-12 \
-            llvm-12-dev libclang-12-dev
+            clang-12 llvm-12 lld-12
 
-          # Cria aliases sem sufixo no PATH
+          # Cria wrappers sem sufixo para o symlink e para o PATH
           mkdir -p $HOME/clang12/bin
           for tool in clang clang++ ld.lld llvm-ar llvm-nm \
                       llvm-objcopy llvm-objdump llvm-strip; do
-            REAL=$(which ${tool}-12 2>/dev/null || which ${tool} 2>/dev/null)
-            if [ -n "$REAL" ]; then
-              ln -sf "$REAL" $HOME/clang12/bin/$tool
-            fi
+            REAL=$(which ${tool}-12 2>/dev/null)
+            [ -n "$REAL" ] && ln -sf "$REAL" $HOME/clang12/bin/$tool
           done
+          # lld pode se chamar lld-12 mas o wrapper precisa ser ld.lld
+          [ -f $HOME/clang12/bin/ld.lld ] || ln -sf $(which lld-12) $HOME/clang12/bin/ld.lld
 
           echo "$HOME/clang12/bin" >> $GITHUB_PATH
           clang-12 --version
 
-      # ── 4. Symlink para o path hardcoded no Makefile ───────────────────────
+      # ── 4. Symlink para o CC hardcoded no Makefile (linha 374) ────────────
       - name: Symlink toolchain to hardcoded Makefile path
         run: |
           HARDCODED="toolchain/clang/host/linux-x86/clang-r349610-jopp"
           mkdir -p "$HARDCODED"
           ln -s $HOME/clang12/bin "$HARDCODED/bin"
-          echo "Symlink OK: $(ls $HARDCODED/bin/clang)"
+          echo "Symlink: $(ls -la $HARDCODED/bin/clang)"
 
-      # ── 5. Build ───────────────────────────────────────────────────────────
+      # ── 5. Patch crítico no Makefile ──────────────────────────────────────
+      # Linha 506: CLANG_FLAGS += -no-integrated-as
+      # Isso força o Clang a chamar o /usr/bin/as externo (x86_64!), que
+      # não entende flags ARM como -EL. Trocamos para -integrated-as para
+      # que o Clang use seu próprio assembler interno (IAS).
+      - name: Patch Makefile - replace -no-integrated-as with -integrated-as
+        run: |
+          grep -n "no-integrated-as" Makefile
+          sed -i 's/-no-integrated-as/-integrated-as/g' Makefile
+          echo "--- Patch aplicado ---"
+          grep -n "integrated-as" Makefile
+
+      # ── 6. Build ───────────────────────────────────────────────────────────
       - name: Build kernel
         run: bash build.sh
         env:
@@ -78,7 +87,7 @@ jobs:
           OBJDUMP: llvm-objdump
           STRIP: llvm-strip
 
-      # ── 6. Localiza a imagem gerada ────────────────────────────────────────
+      # ── 7. Localiza a imagem gerada ────────────────────────────────────────
       - name: Locate output image
         id: find_image
         run: |
@@ -102,7 +111,7 @@ jobs:
             fi
           done
 
-      # ── 7. Upload ──────────────────────────────────────────────────────────
+      # ── 8. Upload ──────────────────────────────────────────────────────────
       - name: Upload kernel image
         uses: actions/upload-artifact@v4
         with:
@@ -113,7 +122,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # ── 8. Resumo ──────────────────────────────────────────────────────────
+      # ── 9. Resumo ──────────────────────────────────────────────────────────
       - name: Build summary
         run: |
           echo "## Build concluido" >> $GITHUB_STEP_SUMMARY
@@ -124,4 +133,3 @@ jobs:
           echo "| Defconfig | exynos9830-r8slte_defconfig |" >> $GITHUB_STEP_SUMMARY
           echo "| Toolchain | Clang 12 (LLVM apt) |" >> $GITHUB_STEP_SUMMARY
           echo "| Image | ${{ steps.find_image.outputs.IMAGE_PATH }} |" >> $GITHUB_STEP_SUMMARY
-
